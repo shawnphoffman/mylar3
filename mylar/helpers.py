@@ -2752,6 +2752,12 @@ def weekly_info(week=None, year=None, current=None):
         weeknumber = 51
         year = 2024
 
+    # strftime("%U") above can leave weeknumber as a string, and the year/week
+    # monkey-patches only cover specific years; coerce both before the date math
+    # so timedelta(weeks=...) doesn't choke on a str (breaks weekly pull in 2026+).
+    weeknumber = int(weeknumber)
+    year = int(year)
+
     startofyear = date(year,1,1)
     week0 = startofyear - timedelta(days=startofyear.isoweekday())
     stweek = datetime.datetime.strptime(week0.strftime('%Y-%m-%d'), '%Y-%m-%d')
