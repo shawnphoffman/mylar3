@@ -1,0 +1,21 @@
+# Local virtualenv (large, host-specific)
+venv/
+env/
+
+# Python caches
+**/__pycache__/
+*.py[co]
+
+# Local runtime state - must NOT be baked into the image
+config.ini
+mylar.db
+.mylar_maintenance.db
+logs/
+cache/
+*.log
+
+# Editor / OS cruft
+.idea/
+.nova/
+.DS_Store
+*.swp

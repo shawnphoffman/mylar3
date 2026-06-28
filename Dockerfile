@@ -1,40 +1,31 @@
-ARG BASE_VERSION=3.8.2-alpine3.11
-FROM python:${BASE_VERSION}
+FROM python:3.12-slim
 
-# set version label
-ARG MYLAR_COMMIT=v0.3.0
-ARG ORG=mylar3
-LABEL version ${BASE_VERSION}_${MYLAR_COMMIT}
+LABEL org.opencontainers.image.source="https://github.com/shawnphoffman/mylar3"
+LABEL org.opencontainers.image.description="Mylar3 - automated comic book manager (personal fork build)"
 
-RUN \
-echo "**** install system packages ****" && \
- apk add --no-cache \
- git=2.24.3-r0 \
- # cfscrape dependecies
- nodejs=12.15.0-r1 \
- # unrar-cffi & Pillow dependencies
- build-base=0.5-r1 \
- # unar-cffi dependencies
- libffi-dev=3.2.1-r6 \
- # Pillow dependencies
- zlib-dev=1.2.11-r3 \
- jpeg-dev=8-r6
+# Runtime system packages:
+#  - git: used by Mylar's version check to read the current commit
+#  - unrar-free / p7zip: archive handling for cbr/cbz post-processing
+#  - libjpeg/zlib: Pillow runtime deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        unrar-free \
+        p7zip-full \
+        libjpeg62-turbo \
+        zlib1g \
+    && rm -rf /var/lib/apt/lists/*
 
-# It might be better to check out release tags than python3-dev HEAD.
-# For development work I reccomend mounting a full git repo from the
-# docker host over /app/mylar.
-RUN echo "**** install app ****" && \
- git config --global advice.detachedHead false && \
- git clone https://github.com/${ORG}/mylar3.git --depth 1 --branch ${MYLAR_COMMIT} --single-branch /app/mylar
+WORKDIR /app/mylar
 
-RUN echo "**** install requirements ****" && \
- pip3 install --no-cache-dir -U -r /app/mylar/requirements.txt && \
- rm -rf ~/.cache/pip/*
+# Install Python deps first so this layer caches across source changes.
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -U -r requirements.txt
 
-# TODO image could be further slimmed by moving python wheel building into a
-# build image and copying the results to the final image.
+# Copy the local fork source (so personal changes are baked into the image).
+COPY . .
 
 # ports and volumes
 VOLUME /config /comics /downloads
 EXPOSE 8090
+
 CMD ["python3", "/app/mylar/Mylar.py", "--nolaunch", "--quiet", "--datadir", "/config/mylar"]
