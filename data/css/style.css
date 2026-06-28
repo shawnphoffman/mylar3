@@ -103,7 +103,7 @@ a.blue {
 
 container {  }
 
-body { background-color: #EBF4FB; min-width: 935px; }
+body { background-color: #18181b; min-width: 935px; }
 
 header { min-height: 68px; width: 100%; min-width: 935px; padding-left: 0px; padding-right: 10px; background-color: #CDC9C9; position: fixed; z-index: 998; }
 
