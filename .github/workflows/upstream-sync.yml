@@ -1,0 +1,133 @@
+name: Sync from upstream release
+
+# Keeps this fork's master in sync with the upstream project's latest GitHub
+# release, while preserving the local customizations layered on top.
+#
+#   - clean merge   -> push master + build/publish the image (see note below)
+#   - merge conflict -> open a PR so a human can resolve it
+#
+# Runs on a daily schedule and can be triggered manually from the Actions tab.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+env:
+  UPSTREAM_URL: https://github.com/mylar3/mylar3.git
+  UPSTREAM_REPO: mylar3/mylar3
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork (master)
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --tags upstream
+
+      - name: Resolve latest upstream release tag
+        id: rel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -z "$tag" ]; then
+            echo "No upstream release found; nothing to do."
+          else
+            echo "Latest upstream release: $tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Determine if sync is needed
+        id: check
+        if: steps.rel.outputs.tag != ''
+        run: |
+          if git merge-base --is-ancestor "${{ steps.rel.outputs.tag }}" HEAD; then
+            echo "master already contains ${{ steps.rel.outputs.tag }}; nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attempt merge
+        id: merge
+        if: steps.check.outputs.needed == 'true'
+        run: |
+          if git merge --no-edit "${{ steps.rel.outputs.tag }}"; then
+            echo "Merged ${{ steps.rel.outputs.tag }} cleanly."
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "Merge conflict; aborting for manual resolution."
+            git merge --abort
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---- clean path: publish the merged image -------------------------------
+      - name: Push merged master
+        if: steps.merge.outputs.clean == 'true'
+        run: git push origin HEAD:master
+
+      - name: Log in to GHCR
+        if: steps.merge.outputs.clean == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        if: steps.merge.outputs.clean == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      # Built inline rather than relying on the push above to trigger
+      # ghcr-publish.yml: a push made with GITHUB_TOKEN does not start another
+      # workflow run (GitHub's recursion guard), so we publish here directly.
+      - name: Build and publish merged image
+        if: steps.merge.outputs.clean == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.rel.outputs.tag }}
+            ghcr.io/${{ github.repository }}:sha-${{ steps.merge.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- conflict path: open a PR for manual resolution ---------------------
+      - name: Open PR for manual resolution
+        if: steps.merge.outputs.clean == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch="upstream-sync/${{ steps.rel.outputs.tag }}"
+          git push origin "refs/tags/${{ steps.rel.outputs.tag }}:refs/heads/$branch" --force
+          gh pr create \
+            --base master \
+            --head "$branch" \
+            --title "Sync upstream ${{ steps.rel.outputs.tag }} (manual merge needed)" \
+            --body "Automated sync could not cleanly merge upstream \`${{ steps.rel.outputs.tag }}\` into \`master\`. Resolve the conflicts in this PR (web editor or locally) and merge. The image will rebuild once it lands on master." \
+            || echo "A PR for this branch may already exist."
